@@ -39,12 +39,14 @@ async function testAll() {
       if (data.latitude && data.longitude) {
         console.log(`✅ ${url}`);
         console.log(`⏱ Time: ${duration} ms`);
+        console.log(`🏷 Name: ${data.name}`);
         console.log(`📍 Lat: ${data.latitude} | Lon: ${data.longitude}`);
         console.log("----------------------------------");
         success++;
       } else {
         console.log(`❌ ${url}`);
         console.log(`⏱ Time: ${duration} ms`);
+        console.log(`🏷 Name: ${data.name}`);
         console.log("Không có lat/lon");
         console.log("----------------------------------");
         failed++;
@@ -70,5 +72,6 @@ async function testAll() {
   console.log("Tổng thời gian:", globalDuration, "ms");
   console.log("Trung bình mỗi request:", Math.round(totalTime / links.length), "ms");
 }
+
 
 testAll();

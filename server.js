@@ -42,75 +42,112 @@ async function getPage() {
     activePages++;
     const page = await browser.newPage();
 
+    // Anti detection
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
+    });
+
+    await page.setUserAgent(
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+  "AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/120.0.0.0 Safari/537.36"
+);
+
+
     // Block heavy resources
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
-      if (["image", "stylesheet", "font", "media"].includes(type)) {
+if (["image", "font", "media"].includes(type)) {
         req.abort();
       } else {
         req.continue();
       }
     });
 
-    await page.setUserAgent(
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
-      "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 " +
-      "Mobile/15E148 Safari/604.1"
-    );
-
     return page;
   }
 
-  // Wait if too many pages
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((r) => setTimeout(r, 100));
   return getPage();
 }
 
 // ===============================
-// Return page to pool
+// Release page
 // ===============================
 function releasePage(page) {
   pagePool.push(page);
 }
 
 // ===============================
-// Extract function
+// Resolve short link → full link
+// ===============================
+async function resolveShortLink(page, url) {
+  await page.goto(url, {
+    waitUntil: "networkidle2",
+    timeout: 20000,
+  });
+
+  // đợi URL đổi khỏi maps.app.goo.gl
+  await page.waitForFunction(
+    () => !location.href.includes("maps.app.goo.gl"),
+    { timeout: 15000 }
+  ).catch(() => {});
+
+  return page.url();
+}
+
+// ===============================
+// Extract lat/lon
 // ===============================
 async function extractGoogleMaps(url) {
   const page = await getPage();
 
   try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 15000,
-    });
+    // Resolve short link
+    await resolveShortLink(page, url);
 
-    // Wait until redirect happens
-    await page.waitForNavigation({
-      waitUntil: "domcontentloaded",
-      timeout: 10000,
-    }).catch(() => {});
+    // Đợi Google Maps load và URL ổn định
+    await page.waitForFunction(
+      () => location.href.includes("@"),
+      { timeout: 15000 }
+    ).catch(() => {});
 
-    const finalUrl = page.url();
+    const currentUrl = page.url();
 
     let lat = null;
     let lon = null;
 
-    const match = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    // Parse từ URL hiện tại (không dùng finalUrl nữa)
+    const match = currentUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
     if (match) {
       lat = parseFloat(match[1]);
       lon = parseFloat(match[2]);
     }
 
-    const title = await page.title();
-    const name = title.replace(" - Google Maps", "");
+    if (!lat || !lon) {
+      const match2 = currentUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+      if (match2) {
+        lat = parseFloat(match2[1]);
+        lon = parseFloat(match2[2]);
+      }
+    }
+
+    // Đợi tên xuất hiện (selector chuẩn Google Maps desktop)
+    await page.waitForSelector("h1.DUwDvf", { timeout: 15000 });
+
+    const name = await page.$eval(
+      "h1.DUwDvf",
+      el => el.textContent.trim()
+    );
 
     return {
       name,
       latitude: lat,
       longitude: lon,
-      final_url: finalUrl,
+      final_url: currentUrl,
     };
 
   } finally {
@@ -118,8 +155,9 @@ async function extractGoogleMaps(url) {
   }
 }
 
+
 // ===============================
-// API Route
+// API
 // ===============================
 app.post("/extract", async (req, res) => {
   const start = Date.now();
@@ -134,7 +172,6 @@ app.post("/extract", async (req, res) => {
 
     const duration = Date.now() - start;
     res.json({ ...result, response_time_ms: duration });
-
   } catch (err) {
     console.error("❌ Error:", err);
     res.status(500).json({ error: err.message });
